@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weather Look-Back</title>
+<style>
+  :root { --bg:#0f1419; --card:#1a212b; --line:#2c3744; --txt:#e6edf3; --mut:#9aa7b4; --accent:#4c9aff; --warm:#ff7b54; --cool:#54a0ff; --cellw:96px; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--txt); padding:24px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--mut); margin:0 0 20px; font-size:13px; }
+  form { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:20px; }
+  label { display:flex; flex-direction:column; gap:5px; font-size:12px; color:var(--mut); text-transform:uppercase; letter-spacing:.04em; }
+  input { background:#0c1116; color:var(--txt); border:1px solid var(--line); border-radius:7px; padding:9px 11px; font-size:15px; min-width:80px; }
+  input#loc { min-width:230px; }
+  input[type=number] { width:80px; }
+  button { background:var(--accent); color:#06121f; border:none; border-radius:7px; padding:10px 20px; font-size:15px; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  #status { margin:12px 0; color:var(--mut); min-height:20px; }
+  #status.err { color:#ff6b6b; }
+  .loc-line { font-size:14px; color:var(--txt); margin-bottom:18px; }
+  .loc-line b { color:var(--accent); }
+  .matrix { display:grid; gap:8px; padding:2px; align-items:stretch; justify-content:start; }
+  .colhead { display:flex; align-items:flex-end; justify-content:center; font-size:14px; font-weight:600; color:var(--txt); padding:0 4px 6px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  .rowhead { display:flex; align-items:center; justify-content:flex-end; font-size:18px; font-weight:700; color:var(--accent); padding-right:10px; white-space:nowrap; }
+  .cell { aspect-ratio:2 / 3; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:10px 6px; text-align:center; display:flex; flex-direction:column; gap:3px; align-items:center; justify-content:center; }
+  .cell.today { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+  .cell .icon { font-size:24px; line-height:1; }
+  .cell .hi { font-size:19px; font-weight:700; color:var(--txt); }
+  .cell .lo { font-size:14px; color:var(--mut); }
+  .cell .pr { font-size:12px; margin-top:3px; }
+  .cell .pr.wet { color:var(--cool); font-weight:600; }
+  .cell .pr.dry { color:#5b6772; }
+  .na { color:#5b6772; }
+  footer { color:var(--mut); font-size:12px; margin-top:8px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+  <h1>Weather Look-Back</h1>
+  <p class="sub">High / low temperature (&deg;F) and precipitation (in) for a date and the days leading up to it, across the last several years. Data from Open-Meteo.</p>
+
+  <form id="f">
+    <label>Date
+      <input type="date" id="date" required>
+    </label>
+    <label>Zip code or location
+      <input type="text" id="loc" placeholder="e.g. 90210  or  Denver, CO" required>
+    </label>
+    <label>Days (incl. date)
+      <input type="number" id="days" value="7" min="1" max="31">
+    </label>
+    <label>Years back
+      <input type="number" id="years" value="10" min="1" max="40">
+    </label>
+    <button type="submit" id="go">Get weather</button>
+  </form>
+
+  <div id="status"></div>
+  <div id="locline" class="loc-line"></div>
+  <div id="results"></div>
+
+  <footer>Recent days (within ~5 days of today) come from the forecast model and may be partly observed/predicted. Older dates use the ERA5 historical reanalysis archive.</footer>
+
+<script>
+"use strict";
+
+const $ = id => document.getElementById(id);
+const pad = n => String(n).padStart(2, "0");
+const isoOf = d => `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}`;
+const isLeap = y => (y % 4 === 0 && y % 100 !== 0) || (y % 400 === 0);
+
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+// default date = today
+(function initDate(){
+  const t = new Date();
+  $("date").value = `${t.getFullYear()}-${pad(t.getMonth()+1)}-${pad(t.getDate())}`;
+})();
+
+function setStatus(msg, isErr){
+  const s = $("status");
+  s.textContent = msg || "";
+  s.className = isErr ? "err" : "";
+}
+
+// Resolve a zip code or place name -> {lat, lon, label}
+async function resolveLocation(input){
+  const q = input.trim();
+  if (/^\d{5}$/.test(q)) {
+    const r = await fetch(`https://api.zippopotam.us/us/${q}`);
+    if (!r.ok) throw new Error(`Zip code "${q}" not found.`);
+    const j = await r.json();
+    const p = j.places && j.places[0];
+    if (!p) throw new Error(`Zip code "${q}" not found.`);
+    return {
+      lat: parseFloat(p.latitude),
+      lon: parseFloat(p.longitude),
+      label: `${p["place name"]}, ${p["state abbreviation"]} ${j["post code"]}`
+    };
+  }
+  const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=1&language=en&format=json`);
+  if (!r.ok) throw new Error("Location lookup failed.");
+  const j = await r.json();
+  const res = j.results && j.results[0];
+  if (!res) throw new Error(`Could not find a location matching "${q}".`);
+  const parts = [res.name, res.admin1, res.country_code].filter(Boolean);
+  return { lat: res.latitude, lon: res.longitude, label: parts.join(", ") };
+}
+
+// Build the 7-day (or N-day) window ending on (year, month, day)
+function windowFor(year, month, day, days){
+  let d = day;
+  if (month === 2 && day === 29 && !isLeap(year)) d = 28; // Feb 29 fallback
+  const end = new Date(Date.UTC(year, month - 1, d));
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - (days - 1));
+  return { start, end };
+}
+
+const DAILY = "temperature_2m_max,temperature_2m_min,precipitation_sum,weather_code";
+
+// Fetch JSON, retrying with exponential backoff when rate-limited (HTTP 429).
+async function fetchJson(url, attempt = 0){
+  const r = await fetch(url);
+  if (r.status === 429 && attempt < 4){
+    await new Promise(res => setTimeout(res, 900 * Math.pow(2, attempt)));
+    return fetchJson(url, attempt + 1);
+  }
+  if (!r.ok) throw new Error(`Weather request failed (${r.status}).`);
+  return r.json();
+}
+
+// Run an async worker over items with limited concurrency (gentle on the API).
+async function runPool(items, worker, concurrency){
+  let i = 0;
+  async function next(){
+    while (i < items.length){ const idx = i++; await worker(items[idx], idx); }
+  }
+  const runners = [];
+  for (let c = 0; c < Math.min(concurrency, items.length); c++) runners.push(next());
+  await Promise.all(runners);
+}
+
+async function fetchWindow(lat, lon, start, end){
+  // recent dates aren't in the archive yet -> use forecast endpoint
+  const cutoff = new Date();
+  cutoff.setUTCDate(cutoff.getUTCDate() - 6);
+  const useForecast = end >= cutoff;
+  const base = useForecast
+    ? "https://api.open-meteo.com/v1/forecast"
+    : "https://archive-api.open-meteo.com/v1/archive";
+  const url = `${base}?latitude=${lat}&longitude=${lon}`
+    + `&start_date=${isoOf(start)}&end_date=${isoOf(end)}`
+    + `&daily=${DAILY}&temperature_unit=fahrenheit&precipitation_unit=inch&timezone=auto`;
+  const j = await fetchJson(url);
+  const out = {}; // iso -> {hi, lo, pr, wc}
+  const dly = j.daily || {};
+  const times = dly.time || [];
+  for (let i = 0; i < times.length; i++){
+    out[times[i]] = {
+      hi: dly.temperature_2m_max ? dly.temperature_2m_max[i] : null,
+      lo: dly.temperature_2m_min ? dly.temperature_2m_min[i] : null,
+      pr: dly.precipitation_sum ? dly.precipitation_sum[i] : null,
+      wc: dly.weather_code ? dly.weather_code[i] : null
+    };
+  }
+  return out;
+}
+
+const todayIso = (() => { const n = new Date(); return `${n.getFullYear()}-${pad(n.getMonth()+1)}-${pad(n.getDate())}`; })();
+
+// Map a WMO weather code to an icon + label.
+function wcIcon(code){
+  if (code == null) return ["·", ""];
+  if (code === 0) return ["☀️", "Clear"];
+  if (code === 1) return ["🌤️", "Mainly clear"];
+  if (code === 2) return ["⛅", "Partly cloudy"];
+  if (code === 3) return ["☁️", "Overcast"];
+  if (code === 45 || code === 48) return ["🌫️", "Fog"];
+  if (code >= 51 && code <= 57) return ["🌦️", "Drizzle"];
+  if (code >= 61 && code <= 67) return ["🌧️", "Rain"];
+  if (code >= 71 && code <= 77) return ["🌨️", "Snow"];
+  if (code >= 80 && code <= 82) return ["🌦️", "Showers"];
+  if (code === 85 || code === 86) return ["🌨️", "Snow showers"];
+  if (code >= 95) return ["⛈️", "Thunderstorm"];
+  return ["·", ""];
+}
+
+const tempTxt = v => (v == null || Number.isNaN(v)) ? `<span class="na">&mdash;</span>` : `${Math.round(v)}°`;
+
+// Aligned grid: dates as shared column headers across the top, years down the left.
+function renderForecast(years, cols, data){
+  const n = cols.length;
+  let html = `<div class="matrix" style="grid-template-columns:auto repeat(${n}, minmax(0, var(--cellw)))">`;
+  html += `<div class="corner"></div>`;
+  cols.forEach(c => { html += `<div class="colhead">${c.label}</div>`; });
+  years.forEach(yr => {
+    const yd = data[yr] || {};
+    html += `<div class="rowhead">${yr}</div>`;
+    cols.forEach(c => {
+      const iso = c.iso[yr];
+      const cell = (iso && yd[iso]) || null;
+      const [icon, cond] = wcIcon(cell ? cell.wc : null);
+      const pr = cell ? cell.pr : null;
+      const prCls = pr == null ? "na" : (pr >= 0.01 ? "wet" : "dry");
+      const prTxt = pr == null ? "&mdash;" : (pr >= 0.01 ? `💧 ${pr.toFixed(2)}″` : `${pr.toFixed(2)}″`);
+      html += `<div class="cell${iso === todayIso ? " today" : ""}">`
+        + `<div class="icon" title="${cond}">${icon}</div>`
+        + `<div class="hi">${tempTxt(cell ? cell.hi : null)}</div>`
+        + `<div class="lo">${tempTxt(cell ? cell.lo : null)}</div>`
+        + `<div class="pr ${prCls}">${prTxt}</div>`
+        + `</div>`;
+    });
+  });
+  html += `</div>`;
+  return html;
+}
+
+$("f").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("results").innerHTML = "";
+  $("locline").innerHTML = "";
+  const dateVal = $("date").value;
+  const locVal = $("loc").value;
+  const days = Math.max(1, Math.min(31, parseInt($("days").value, 10) || 7));
+  const yearsBack = Math.max(1, Math.min(40, parseInt($("years").value, 10) || 10));
+  if (!dateVal || !locVal) { setStatus("Enter both a date and a location.", true); return; }
+
+  const [Y, M, D] = dateVal.split("-").map(Number);
+  $("go").disabled = true;
+  setStatus("Looking up location…");
+
+  try {
+    const loc = await resolveLocation(locVal);
+    $("locline").innerHTML = `Showing weather for <b>${loc.label}</b> &nbsp;(${loc.lat.toFixed(3)}, ${loc.lon.toFixed(3)})`;
+    setStatus(`Fetching ${yearsBack} years of data…`);
+
+    // years newest-first
+    const yearList = [];
+    for (let i = 0; i < yearsBack; i++) yearList.push(Y - i);
+
+    // Column definitions: offset 0..days-1 (oldest->newest). Per year each col maps to a specific ISO date.
+    const cols = [];
+    for (let off = 0; off < days; off++) cols.push({ off, label: "", iso: {} });
+
+    const data = {}; // year -> iso -> values
+    let done = 0;
+    await runPool(yearList, async (yr) => {
+      const { start, end } = windowFor(yr, M, D, days);
+      const w = await fetchWindow(loc.lat, loc.lon, start, end);
+      data[yr] = w;
+      // fill column iso + labels
+      for (let off = 0; off < days; off++){
+        const dd = new Date(start);
+        dd.setUTCDate(dd.getUTCDate() + off);
+        cols[off].iso[yr] = isoOf(dd);
+        if (yr === Y) cols[off].label = `${MONTHS[dd.getUTCMonth()]} ${dd.getUTCDate()}`;
+      }
+      setStatus(`Fetched ${++done} of ${yearList.length} years…`);
+    }, 3);
+
+    $("results").innerHTML = renderForecast(yearList, cols, data);
+    setStatus("");
+  } catch (err) {
+    setStatus(err.message || String(err), true);
+  } finally {
+    $("go").disabled = false;
+  }
+});
+</script>
+</body>
+</html>
