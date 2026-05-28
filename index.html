@@ -23,7 +23,7 @@
   .loc-line b { color:var(--accent); }
   .matrix { display:grid; gap:8px; padding:2px; align-items:stretch; justify-content:start; overflow-x:auto; }
   .colhead { display:flex; align-items:flex-end; justify-content:center; font-size:14px; font-weight:600; color:var(--txt); padding:0 4px 6px; border-bottom:1px solid var(--line); white-space:nowrap; }
-  .corner, .rowhead { position:sticky; left:0; z-index:2; background:var(--bg); }
+  .corner, .rowhead { position:sticky; left:0; z-index:2; background:var(--bg); box-shadow:8px 0 0 0 var(--bg); }
   .rowhead { display:flex; align-items:center; justify-content:flex-end; font-size:18px; font-weight:700; color:var(--accent); padding-right:10px; white-space:nowrap; }
   .cell { aspect-ratio:2 / 3; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:10px 6px; text-align:center; display:flex; flex-direction:column; gap:3px; align-items:center; justify-content:center; }
   .cell.today { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
