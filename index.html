@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Weather Look-Back</title>
 <style>
-  :root { --bg:#0f1419; --card:#1a212b; --line:#2c3744; --txt:#e6edf3; --mut:#9aa7b4; --accent:#4c9aff; --warm:#ff7b54; --cool:#54a0ff; --cellw:96px; }
+  :root { --bg:#0f1419; --card:#1a212b; --line:#2c3744; --txt:#e6edf3; --mut:#9aa7b4; --accent:#4c9aff; --warm:#ff7b54; --cool:#54a0ff; --cellw:96px; --cellmin:66px; }
   * { box-sizing: border-box; }
   body { margin:0; font:15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--txt); padding:24px; }
   h1 { font-size:22px; margin:0 0 4px; }
@@ -21,8 +21,9 @@
   #status.err { color:#ff6b6b; }
   .loc-line { font-size:14px; color:var(--txt); margin-bottom:18px; }
   .loc-line b { color:var(--accent); }
-  .matrix { display:grid; gap:8px; padding:2px; align-items:stretch; justify-content:start; }
+  .matrix { display:grid; gap:8px; padding:2px; align-items:stretch; justify-content:start; overflow-x:auto; }
   .colhead { display:flex; align-items:flex-end; justify-content:center; font-size:14px; font-weight:600; color:var(--txt); padding:0 4px 6px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  .corner, .rowhead { position:sticky; left:0; z-index:2; background:var(--bg); }
   .rowhead { display:flex; align-items:center; justify-content:flex-end; font-size:18px; font-weight:700; color:var(--accent); padding-right:10px; white-space:nowrap; }
   .cell { aspect-ratio:2 / 3; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:10px 6px; text-align:center; display:flex; flex-direction:column; gap:3px; align-items:center; justify-content:center; }
   .cell.today { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
@@ -193,7 +194,7 @@ const tempTxt = v => (v == null || Number.isNaN(v)) ? `<span class="na">&mdash;<
 // Aligned grid: dates as shared column headers across the top, years down the left.
 function renderForecast(years, cols, data){
   const n = cols.length;
-  let html = `<div class="matrix" style="grid-template-columns:auto repeat(${n}, minmax(0, var(--cellw)))">`;
+  let html = `<div class="matrix" style="grid-template-columns:auto repeat(${n}, minmax(var(--cellmin), var(--cellw)))">`;
   html += `<div class="corner"></div>`;
   cols.forEach(c => { html += `<div class="colhead">${c.label}</div>`; });
   years.forEach(yr => {
